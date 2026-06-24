@@ -1,0 +1,7 @@
+rocktube.exe
+*.exe
+.rocktube/
+.gocache/
+.git-rocktube/
+dist/
+build/
