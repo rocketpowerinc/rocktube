@@ -102,6 +102,9 @@ button{font-family:inherit;cursor:pointer;border:none;background:none;color:inhe
 .folder-children{margin-left:16px}
 .folder-node.collapsed>.folder-children{display:none}
 .main{flex:1;padding:24px 24px 60px;min-width:0}
+.page-head{margin-bottom:18px}
+.page-head h1{font-size:20px;line-height:1.25;margin-bottom:4px}
+.page-head p{font-size:14px;color:var(--text-dim)}
 .crumbs{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:18px;color:var(--text-dim);font-size:14px}
 .crumbs button{color:var(--text);font-weight:600}
 .crumbs button:hover{color:var(--accent-2)}
@@ -279,8 +282,8 @@ button{font-family:inherit;cursor:pointer;border:none;background:none;color:inhe
     <div class="nav-item" data-nav="recent">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg> Recent
     </div>
-    <div class="nav-item" data-nav="most">
-      <svg viewBox="0 0 24 24" fill="currentColor"><path d="M13.5 5.5c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zM9.8 8.9L7 23h2.1l1.8-8 2.1 2v6h2v-7.5l-2.1-2 .6-3C14.8 12 16.8 13 19 13v-2c-1.9 0-3.5-1-4.3-2.4l-1-1.6c-.4-.6-1-1-1.7-1-.3 0-.5.1-.8.1L6 8.3V13h2V9.6l1.8-.7"/></svg> Most viewed
+    <div class="nav-item" data-nav="liked">
+      <svg viewBox="0 0 24 24" fill="currentColor"><path d="M1 21h4V9H1v12zm22-11c0-1.1-.9-2-2-2h-6.31l.95-4.57.03-.32c0-.41-.17-.79-.44-1.06L14.17 1 7.59 7.59C7.22 7.95 7 8.45 7 9v10c0 1.1.9 2 2 2h9c.83 0 1.54-.5 1.84-1.22l3.02-7.05c.09-.23.14-.47.14-.73v-2z"/></svg> Liked videos
     </div>
     <div class="nav-divider"></div>
     <div class="nav-section">Library</div>
@@ -315,6 +318,47 @@ const fmtBytes = b => {
 };
 const mediaPath = id => String(id).split('/').map(encodeURIComponent).join('/');
 const folderLabel = p => p ? p.split('/').filter(Boolean).pop() : 'All videos';
+const RECENT_KEY = 'rt_recent';
+
+function shuffled(list, limit){
+  const a = list.slice();
+  for (let i=a.length-1;i>0;i--){
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a.slice(0, limit);
+}
+
+function recentIDs(){
+  try {
+    const ids = JSON.parse(localStorage.getItem(RECENT_KEY) || '[]');
+    return Array.isArray(ids) ? ids : [];
+  } catch(e){
+    return [];
+  }
+}
+
+function rememberRecent(id){
+  const ids = recentIDs().filter(x => x !== id);
+  ids.unshift(id);
+  localStorage.setItem(RECENT_KEY, JSON.stringify(ids.slice(0, 20)));
+}
+
+function likedIDs(){
+  const ids = [];
+  for (let i=0;i<localStorage.length;i++){
+    const key = localStorage.key(i);
+    if (key && key.startsWith('rt_vote:') && localStorage.getItem(key) === 'like'){
+      ids.push(key.slice('rt_vote:'.length));
+    }
+  }
+  return ids;
+}
+
+function videosByIDs(ids){
+  const byID = new Map(CACHE.map(v => [v.id, v]));
+  return ids.map(id => byID.get(id)).filter(Boolean);
+}
 
 // ---------- routing (hash based) ----------
 function route(){
@@ -342,15 +386,6 @@ async function api(path){
   return r.json();
 }
 
-function sortVideos(list, mode){
-  const a = list.slice();
-  switch(mode){
-    case 'recent': return a.sort((x,y)=> (y._mtime||0)-(x._mtime||0));
-    case 'most':   return a.sort((x,y)=> y.views-x.views);
-    default:       return a;
-  }
-}
-
 // ---------- home ----------
 async function renderHome(){
   CURRENT_FOLDER = '';
@@ -359,9 +394,7 @@ async function renderHome(){
   try {
     const data = await api('/api/videos');
     CACHE = data.videos || [];
-    // fetch mtimes indirectly: we rely on "uploaded" string for ordering hint,
-    // but sort newest-first by name length fallback isn't useful. Use original order.
-    drawGrid(CACHE, breadcrumbsHTML(''));
+    drawGrid(shuffled(CACHE, 20), pageHeadHTML('Home', '20 random videos from your library'));
   } catch(e){
     app.innerHTML = errHTML(e);
   }
@@ -376,7 +409,15 @@ async function renderNav(mode){
     const data = await api('/api/videos');
     CACHE = data.videos || [];
   }
-  drawGrid(sortVideos(CACHE, mode), breadcrumbsHTML(''));
+  if (mode === 'recent'){
+    drawGrid(videosByIDs(recentIDs()), pageHeadHTML('Recent', 'The last 20 videos played in this browser'));
+    return;
+  }
+  if (mode === 'liked'){
+    drawGrid(videosByIDs(likedIDs()), pageHeadHTML('Liked videos', 'Videos liked in this browser'));
+    return;
+  }
+  drawGrid(CACHE, pageHeadHTML('All videos', CACHE.length + ' videos in your library'));
 }
 
 function renderSearch(q){
@@ -450,6 +491,10 @@ function breadcrumbsHTML(folder){
   return html;
 }
 
+function pageHeadHTML(title, subtitle){
+  return '<div class="page-head"><h1>'+esc(title)+'</h1><p>'+esc(subtitle)+'</p></div>';
+}
+
 function wireBreadcrumbs(){
   document.querySelectorAll('.crumbs button[data-folder]').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -492,6 +537,7 @@ async function renderWatch(id){
     try { const d = await api('/api/videos'); CACHE = d.videos||[]; } catch(e){}
   }
   const v = CACHE.find(x => x.id === id) || {id, name: id, title: id, path: ''};
+  rememberRecent(v.id);
   const src = '/stream/'+mediaPath(v.id);
   const initial = esc((v.title||'?').trim().charAt(0).toUpperCase() || '?');
   const subTrack = v.hasSubs ? '<track kind="subtitles" src="/subtitle/'+mediaPath(v.id)+'" srclang="en" label="Subtitles" default>' : '';
@@ -566,11 +612,6 @@ async function renderWatch(id){
 
   wireRating(v);
   wireComments(v);
-}
-
-function folderName(){
-  // best-effort: prefer a value injected by the server, else "Local".
-  return window._RT_FOLDER || 'Local library';
 }
 
 // ---- like / dislike --------------------------------------------------------
