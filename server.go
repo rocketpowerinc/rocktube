@@ -28,8 +28,10 @@ type Server struct {
 	cache    string // absolute path to the .rocktube cache folder
 	router   *http.ServeMux
 	mu       sync.Mutex
+	cacheMu  sync.Mutex
 	views    map[string]int64 // videoName -> view count
 	lastScan time.Time
+	cacheRun CacheStatus
 	social   *socialStore
 }
 
@@ -55,6 +57,8 @@ func (s *Server) routes() {
 	mux.HandleFunc("/api/folders", s.handleFolders)
 	mux.HandleFunc("/api/view", s.handleView)
 	mux.HandleFunc("/api/search", s.handleSearch)
+	mux.HandleFunc("/api/cache/status", s.handleCacheStatus)
+	mux.HandleFunc("/api/cache/start", s.handleCacheStart)
 	mux.HandleFunc("/api/comments", s.handleComments)
 	mux.HandleFunc("/api/rate", s.handleRate)
 	mux.HandleFunc("/thumb/", s.handleThumb)
@@ -181,10 +185,6 @@ func (s *Server) handleVideos(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, errMap(err))
 		return
-	}
-	// Kick off thumbnail generation for anything missing (non-blocking).
-	for _, v := range videos {
-		s.ensureThumb(v.Name)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"videos": videos})
 }
@@ -442,12 +442,11 @@ func (s *Server) handleThumb(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	thumbPath := filepath.Join(s.cache, "thumbs", hashName(name)+".jpg")
+	thumbPath := s.thumbPath(name)
 	if _, err := os.Stat(thumbPath); err != nil {
-		if err := generateThumb(filepath.Join(s.root, name), thumbPath); err != nil {
-			servePlaceholder(w)
-			return
-		}
+		s.ensureThumb(name)
+		servePlaceholder(w)
+		return
 	}
 	w.Header().Set("Content-Type", "image/jpeg")
 	w.Header().Set("Cache-Control", "public, max-age=86400")

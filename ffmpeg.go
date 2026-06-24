@@ -22,22 +22,24 @@ type FileMeta struct {
 }
 
 var (
-	thumbInFlight sync.Map // name -> chan struct{} to dedupe generation
+	thumbInFlight sync.Map // name -> struct{}{} to dedupe thumbnail generation
+	ffmpegOnce    sync.Once
+	ffmpegPath    string
+	ffmpegErr     error
+
+	ffprobeOnce sync.Once
+	ffprobePath string
+	ffprobeErr  error
+
+	thumbWork = make(chan struct{}, 2)
 )
 
 // loadMeta returns cached metadata for name, or an empty FileMeta if none.
-// It does NOT generate; generation happens lazily so the first list is fast.
+// Cache generation is controlled by the explicit library cache job.
 func (s *Server) loadMeta(name string) FileMeta {
-	path := filepath.Join(s.cache, "meta", hashName(name)+".json")
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(s.metaPath(name))
 	if err != nil {
-		// Generate now (cheap ffprobe call) and cache.
-		m, err := probeMeta(filepath.Join(s.root, name))
-		if err != nil {
-			return FileMeta{}
-		}
-		s.saveMeta(name, m)
-		return m
+		return FileMeta{}
 	}
 	var m FileMeta
 	if json.Unmarshal(data, &m) != nil {
@@ -57,8 +59,7 @@ func (s *Server) saveMeta(name string, m FileMeta) {
 // ensureThumb generates the thumbnail in the background if it doesn't exist.
 // It dedupes concurrent calls for the same file via thumbInFlight.
 func (s *Server) ensureThumb(name string) {
-	thumbPath := filepath.Join(s.cache, "thumbs", hashName(name)+".jpg")
-	if _, err := os.Stat(thumbPath); err == nil {
+	if _, err := os.Stat(s.thumbPath(name)); err == nil {
 		return // already done
 	}
 	if _, loaded := thumbInFlight.LoadOrStore(name, struct{}{}); loaded {
@@ -66,14 +67,17 @@ func (s *Server) ensureThumb(name string) {
 	}
 	go func() {
 		defer thumbInFlight.Delete(name)
-		_ = generateThumb(filepath.Join(s.root, name), thumbPath)
+		thumbWork <- struct{}{}
+		defer func() { <-thumbWork }()
+		_ = generateThumb(filepath.Join(s.root, filepath.FromSlash(name)), s.thumbPath(name))
 	}()
 }
 
 // generateThumb seeks to ~20% of the movie and grabs one JPEG frame.
 func generateThumb(src, dst string) error {
-	if _, err := exec.LookPath("ffmpeg"); err != nil {
-		return fmt.Errorf("ffmpeg not found in PATH")
+	ffmpeg, err := ffmpegExecutable()
+	if err != nil {
+		return err
 	}
 	// Read duration first so we can pick an interesting frame that isn't a
 	// black intro. Fall back to a fixed offset if probing fails.
@@ -88,7 +92,7 @@ func generateThumb(src, dst string) error {
 	// tmp file so a half-written image is never served. Keep the .jpg suffix so
 	// ffmpeg can infer the output format (a bare .tmp makes it error out).
 	tmp := dst + ".generating.jpg"
-	cmd := exec.Command("ffmpeg",
+	cmd := exec.Command(ffmpeg,
 		"-ss", seek,
 		"-i", src,
 		"-frames:v", "1",
@@ -106,10 +110,11 @@ func generateThumb(src, dst string) error {
 
 // probeMeta runs ffprobe to get duration + dimensions.
 func probeMeta(path string) (FileMeta, error) {
-	if _, err := exec.LookPath("ffprobe"); err != nil {
-		return FileMeta{}, fmt.Errorf("ffprobe not found in PATH")
+	ffprobe, err := ffprobeExecutable()
+	if err != nil {
+		return FileMeta{}, err
 	}
-	out, err := exec.Command("ffprobe",
+	out, err := exec.Command(ffprobe,
 		"-v", "error",
 		"-select_streams", "v:0",
 		"-show_entries", "stream=width,height:format=duration",
@@ -140,6 +145,26 @@ func probeMeta(path string) (FileMeta, error) {
 		m.Duration = ""
 	}
 	return m, nil
+}
+
+func ffmpegExecutable() (string, error) {
+	ffmpegOnce.Do(func() {
+		ffmpegPath, ffmpegErr = exec.LookPath("ffmpeg")
+		if ffmpegErr != nil {
+			ffmpegErr = fmt.Errorf("ffmpeg not found in PATH")
+		}
+	})
+	return ffmpegPath, ffmpegErr
+}
+
+func ffprobeExecutable() (string, error) {
+	ffprobeOnce.Do(func() {
+		ffprobePath, ffprobeErr = exec.LookPath("ffprobe")
+		if ffprobeErr != nil {
+			ffprobeErr = fmt.Errorf("ffprobe not found in PATH")
+		}
+	})
+	return ffprobePath, ffprobeErr
 }
 
 func formatDuration(sec int) string {

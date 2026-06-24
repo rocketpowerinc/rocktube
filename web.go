@@ -67,6 +67,12 @@ button{font-family:inherit;cursor:pointer;border:none;background:none;color:inhe
   background:var(--bg-3);font-size:14px;
 }
 .chip:hover{background:var(--bg-hover)}
+.scan-btn{
+  width:36px;height:36px;border-radius:50%;display:grid;place-items:center;
+  background:var(--bg-3);color:var(--text-dim);
+}
+.scan-btn:hover{background:var(--bg-hover);color:var(--text)}
+.scan-btn svg{width:20px;height:20px}
 
 /* ---------- layout ---------- */
 .shell{display:flex;min-height:calc(100vh - 56px)}
@@ -240,6 +246,23 @@ button{font-family:inherit;cursor:pointer;border:none;background:none;color:inhe
 .sk-card .thumb{border-radius:var(--radius)}
 .empty{text-align:center;padding:80px 20px;color:var(--text-faint)}
 .empty svg{width:64px;height:64px;margin-bottom:16px;opacity:.5}
+.cache-panel{max-width:760px;margin:32px auto 0;padding:0 4px}
+.cache-head{display:flex;align-items:flex-start;justify-content:space-between;gap:18px;margin-bottom:22px}
+.cache-head h1{font-size:22px;line-height:1.25;margin-bottom:6px}
+.cache-head p{color:var(--text-dim);font-size:14px;line-height:1.45}
+.cache-meter{height:10px;border-radius:999px;background:var(--bg-3);overflow:hidden;margin:18px 0 12px}
+.cache-meter span{display:block;height:100%;width:0;background:var(--accent-2);transition:width .25s ease}
+.cache-stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-top:16px}
+.cache-stat{background:var(--bg-2);border-radius:var(--radius-sm);padding:12px}
+.cache-stat b{display:block;font-size:20px;line-height:1.1}
+.cache-stat span{display:block;margin-top:4px;color:var(--text-dim);font-size:12px}
+.cache-current{margin-top:14px;color:var(--text-dim);font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cache-actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:22px}
+.action-btn{display:inline-flex;align-items:center;gap:8px;height:36px;padding:0 14px;border-radius:18px;background:var(--bg-3);font-size:14px;font-weight:600}
+.action-btn:hover{background:var(--bg-hover)}
+.action-btn.primary{background:var(--text);color:var(--bg)}
+.action-btn.primary:hover{background:#fff}
+.action-btn.danger{color:#ffb4c2}
 .spinner{
   width:40px;height:40px;border:3px solid var(--bg-3);border-top-color:var(--accent-2);
   border-radius:50%;animation:spin 1s linear infinite;margin:60px auto;
@@ -250,7 +273,7 @@ button{font-family:inherit;cursor:pointer;border:none;background:none;color:inhe
 .back:hover{color:var(--text)}
 
 @media(max-width:1000px){.sidebar{display:none}.watch{flex-direction:column}.up-next{width:100%}}
-@media(max-width:600px){.logo span,.top-actions{display:none}.main{padding:16px}}
+@media(max-width:600px){.logo span,.top-actions{display:none}.main{padding:16px}.cache-stats{grid-template-columns:repeat(2,minmax(0,1fr))}.cache-head{display:block}}
 </style>
 </head>
 <body>
@@ -270,7 +293,10 @@ button{font-family:inherit;cursor:pointer;border:none;background:none;color:inhe
     </div>
   </form>
   <div class="top-actions">
-    <div class="chip" title="Folder being served" id="folderChip">📁 Local</div>
+    <button class="scan-btn" title="Scan for changes" id="scanBtn" aria-label="Scan for changes">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 0 1-15.5 6.2"/><path d="M3 12A9 9 0 0 1 18.5 5.8"/><path d="M18 2v4h4"/><path d="M6 22v-4H2"/></svg>
+    </button>
+    <button class="chip" title="Open cache status" id="folderChip">Local</button>
   </div>
 </header>
 
@@ -290,6 +316,9 @@ button{font-family:inherit;cursor:pointer;border:none;background:none;color:inhe
     <div class="nav-item" data-nav="all">
       <svg viewBox="0 0 24 24" fill="currentColor"><path d="M4 6H2v14c0 1.1.9 2 2 2h14v-2H4V6zm16-4H8c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-1 9h-4v4h-2v-4H9V9h4V5h2v4h4v2z"/></svg> All videos
     </div>
+    <div class="nav-item" data-nav="cache">
+      <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 3C7.03 3 3 4.79 3 7v10c0 2.21 4.03 4 9 4s9-1.79 9-4V7c0-2.21-4.03-4-9-4zm0 2c4.42 0 7 1.43 7 2s-2.58 2-7 2-7-1.43-7-2 2.58-2 7-2zm0 14c-4.42 0-7-1.43-7-2v-2.08C6.61 15.58 9.12 16 12 16s5.39-.42 7-1.08V17c0 .57-2.58 2-7 2zm0-5c-4.42 0-7-1.43-7-2V9.92C6.61 10.58 9.12 11 12 11s5.39-.42 7-1.08V12c0 .57-2.58 2-7 2z"/></svg> Cache
+    </div>
     <div class="folder-tree" id="folderTree"></div>
   </aside>
   <main class="main" id="app"></main>
@@ -301,6 +330,8 @@ let CACHE = [];      // all videos seen so far
 let VIEW = 'home';   // current nav selection
 let FOLDER_TREE = [];
 let CURRENT_FOLDER = '';
+let CACHE_STATUS = null;
+let CACHE_TIMER = null;
 
 const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const fmtViews = n => {
@@ -363,6 +394,9 @@ function videosByIDs(ids){
 // ---------- routing (hash based) ----------
 function route(){
   const h = location.hash;
+  if (h.startsWith('#/cache')) {
+    return renderCache(false);
+  }
   if (h.startsWith('#/watch')) {
     const id = new URLSearchParams(h.split('?')[1]).get('id');
     if (id) return renderWatch(id);
@@ -375,15 +409,131 @@ function route(){
     const folder = new URLSearchParams(h.split('?')[1]).get('path') || '';
     return renderFolder(folder);
   }
+  if (cacheNeedsWork(CACHE_STATUS)) {
+    return renderCache(true);
+  }
   renderHome();
 }
 window.addEventListener('hashchange', route);
 
 // ---------- API ----------
-async function api(path){
-  const r = await fetch(path);
+async function api(path, options){
+  const r = await fetch(path, options);
   if (!r.ok) throw new Error('request failed');
   return r.json();
+}
+
+function cacheNeedsWork(st){
+  return st && st.total > 0 && (st.running || st.metaCached < st.total || st.thumbCached < st.total);
+}
+
+function cachePercent(st){
+  if (!st || !st.total) return 0;
+  if (st.running) return Math.round((st.done / st.total) * 100);
+  return Math.round((Math.min(st.metaCached || 0, st.thumbCached || 0) / st.total) * 100);
+}
+
+async function loadCacheStatus(){
+  CACHE_STATUS = await api('/api/cache/status');
+  updateCacheChip(CACHE_STATUS);
+  return CACHE_STATUS;
+}
+
+function updateCacheChip(st){
+  const chip = document.getElementById('folderChip');
+  if (!chip || !st) return;
+  if (st.running) {
+    const pct = cachePercent(st);
+    chip.textContent = 'Caching ' + pct + '%';
+  } else if (st.total) {
+    chip.textContent = st.thumbCached + '/' + st.total + ' cached';
+  } else {
+    chip.textContent = 'Local';
+  }
+}
+
+async function startCache(force){
+  CACHE_STATUS = await api('/api/cache/start?force=' + (force ? '1' : '0'), {method:'POST'});
+}
+
+async function renderCache(autoStart){
+  CURRENT_FOLDER = '';
+  setActiveNav('cache');
+  clearInterval(CACHE_TIMER);
+  app.innerHTML = cacheHTML(CACHE_STATUS || {total:0,done:0,metaCached:0,thumbCached:0,message:'Checking cache'});
+  wireCacheActions();
+  try {
+    let st = await loadCacheStatus();
+    if (autoStart && cacheNeedsWork(st) && !st.running) {
+      await startCache(false);
+      st = await loadCacheStatus();
+    }
+    drawCacheStatus(st);
+    if (st.running) {
+      CACHE_TIMER = setInterval(async () => {
+        try {
+          const next = await loadCacheStatus();
+          drawCacheStatus(next);
+          if (!next.running) clearInterval(CACHE_TIMER);
+        } catch(e) {}
+      }, 1000);
+    }
+  } catch(e) {
+    app.innerHTML = errHTML(e);
+  }
+}
+
+function cacheHTML(st){
+  const pct = cachePercent(st);
+  return '<div class="cache-panel">' +
+    '<div class="cache-head">' +
+      '<div><h1>Library cache</h1><p id="cacheMessage">'+esc(st.message || 'Checking cache')+'</p></div>' +
+      '<div style="color:var(--text-dim);font-size:14px;white-space:nowrap" id="cachePct">'+pct+'%</div>' +
+    '</div>' +
+    '<div class="cache-meter"><span id="cacheBar" style="width:'+pct+'%"></span></div>' +
+    '<div class="cache-current" id="cacheCurrent">'+esc(st.current || '')+'</div>' +
+    '<div class="cache-stats">' +
+      '<div class="cache-stat"><b id="cacheDone">'+(st.done||0)+'</b><span>Scanned</span></div>' +
+      '<div class="cache-stat"><b id="cacheTotal">'+(st.total||0)+'</b><span>Videos</span></div>' +
+      '<div class="cache-stat"><b id="cacheMeta">'+(st.metaCached||0)+'</b><span>Metadata</span></div>' +
+      '<div class="cache-stat"><b id="cacheThumbs">'+(st.thumbCached||0)+'</b><span>Thumbnails</span></div>' +
+    '</div>' +
+    '<div class="cache-actions">' +
+      '<button class="action-btn primary" id="cacheScanBtn">Scan for changes</button>' +
+      '<button class="action-btn" id="cacheBrowseBtn">Browse anyway</button>' +
+      '<button class="action-btn danger" id="cacheForceBtn">Rebuild all</button>' +
+    '</div>' +
+  '</div>';
+}
+
+function drawCacheStatus(st){
+  const pct = cachePercent(st);
+  const msg = st.scanning ? 'Scanning library' : (st.message || (st.running ? 'Building cache' : 'Cache ready'));
+  document.getElementById('cacheMessage').textContent = msg;
+  document.getElementById('cachePct').textContent = pct + '%';
+  document.getElementById('cacheBar').style.width = pct + '%';
+  document.getElementById('cacheCurrent').textContent = st.current || '';
+  document.getElementById('cacheDone').textContent = st.done || 0;
+  document.getElementById('cacheTotal').textContent = st.total || 0;
+  document.getElementById('cacheMeta').textContent = st.metaCached || 0;
+  document.getElementById('cacheThumbs').textContent = st.thumbCached || 0;
+}
+
+function wireCacheActions(){
+  document.getElementById('cacheScanBtn').addEventListener('click', async () => {
+    await startCache(false);
+    renderCache(false);
+  });
+  document.getElementById('cacheForceBtn').addEventListener('click', async () => {
+    if (!confirm('Rebuild all cached thumbnails and metadata?')) return;
+    await startCache(true);
+    renderCache(false);
+  });
+  document.getElementById('cacheBrowseBtn').addEventListener('click', () => {
+    clearInterval(CACHE_TIMER);
+    CACHE_STATUS = null;
+    location.hash = '#/folder?path=';
+  });
 }
 
 // ---------- home ----------
@@ -779,6 +929,7 @@ document.querySelectorAll('.nav-item').forEach(n => {
   n.addEventListener('click', () => {
     const v = n.dataset.nav;
     if (v === 'home'){ location.hash = ''; }
+    else if (v === 'cache'){ location.hash = '#/cache'; }
     else { renderNav(v); }
   });
 });
@@ -841,13 +992,19 @@ document.getElementById('searchForm').addEventListener('submit', e => {
   const q = document.getElementById('searchInput').value.trim();
   location.hash = '#/search?q=' + encodeURIComponent(q);
 });
+document.getElementById('scanBtn').addEventListener('click', () => {
+  location.hash = '#/cache';
+});
+document.getElementById('folderChip').addEventListener('click', () => {
+  location.hash = '#/cache';
+});
 
 function errHTML(e){
   return '<div class="empty"><div style="font-size:18px;margin-bottom:8px;color:var(--text)">Something went wrong</div><div>'+esc(e.message)+'</div></div>';
 }
 
 // ---------- boot ----------
-loadFolders().finally(route);
+Promise.allSettled([loadFolders(), loadCacheStatus()]).finally(route);
 </script>
 </body>
 </html>`
