@@ -76,6 +76,7 @@ func (s *socialStore) load() {
 func (s *socialStore) save() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	_ = os.MkdirAll(s.cache, 0o755)
 	if c, err := json.Marshal(s.comments); err == nil {
 		_ = os.WriteFile(filepath.Join(s.cache, "comments.json"), c, 0o644)
 	}
@@ -144,6 +145,18 @@ func (s *socialStore) commentsFor(videoName string) []Comment {
 	defer s.mu.Unlock()
 	out := make([]Comment, len(s.comments[videoName]))
 	copy(out, s.comments[videoName])
+	return out
+}
+
+func (s *socialStore) commentedVideos() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]string, 0, len(s.comments))
+	for name, comments := range s.comments {
+		if len(comments) > 0 {
+			out = append(out, name)
+		}
+	}
 	return out
 }
 

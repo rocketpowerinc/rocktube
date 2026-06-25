@@ -311,6 +311,9 @@ button{font-family:inherit;cursor:pointer;border:none;background:none;color:inhe
     <div class="nav-item" data-nav="liked">
       <svg viewBox="0 0 24 24" fill="currentColor"><path d="M1 21h4V9H1v12zm22-11c0-1.1-.9-2-2-2h-6.31l.95-4.57.03-.32c0-.41-.17-.79-.44-1.06L14.17 1 7.59 7.59C7.22 7.95 7 8.45 7 9v10c0 1.1.9 2 2 2h9c.83 0 1.54-.5 1.84-1.22l3.02-7.05c.09-.23.14-.47.14-.73v-2z"/></svg> Liked videos
     </div>
+    <div class="nav-item" data-nav="commented">
+      <svg viewBox="0 0 24 24" fill="currentColor"><path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-2 12H6v-2h12v2zm0-3H6V9h12v2zm0-3H6V6h12v2z"/></svg> Commented Videos
+    </div>
     <div class="nav-divider"></div>
     <div class="nav-section">Library</div>
     <div class="nav-item" data-nav="all">
@@ -332,6 +335,7 @@ let FOLDER_TREE = [];
 let CURRENT_FOLDER = '';
 let CACHE_STATUS = null;
 let CACHE_TIMER = null;
+let CACHE_PROMPTED = false;
 
 const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const fmtViews = n => {
@@ -391,6 +395,17 @@ function videosByIDs(ids){
   return ids.map(id => byID.get(id)).filter(Boolean);
 }
 
+async function fetchVideosByIDs(ids){
+  const unique = Array.from(new Set(ids.filter(Boolean)));
+  if (!unique.length) return [];
+  const qs = new URLSearchParams();
+  unique.forEach(id => qs.append('id', id));
+  const data = await api('/api/videos?' + qs.toString());
+  const videos = data.videos || [];
+  mergeCache(videos);
+  return videosByIDs(unique);
+}
+
 // ---------- routing (hash based) ----------
 function route(){
   const h = location.hash;
@@ -409,12 +424,22 @@ function route(){
     const folder = new URLSearchParams(h.split('?')[1]).get('path') || '';
     return renderFolder(folder);
   }
-  if (cacheNeedsWork(CACHE_STATUS)) {
+  if (!CACHE_PROMPTED && cacheNeedsWork(CACHE_STATUS)) {
+    CACHE_PROMPTED = true;
     return renderCache(true);
   }
   renderHome();
 }
 window.addEventListener('hashchange', route);
+
+function openWatch(id){
+  const next = '#/watch?id=' + encodeURIComponent(id);
+  if (location.hash === next) {
+    renderWatch(id);
+    return;
+  }
+  location.hash = next;
+}
 
 // ---------- API ----------
 async function api(path, options){
@@ -538,13 +563,15 @@ function wireCacheActions(){
 
 // ---------- home ----------
 async function renderHome(){
+  clearInterval(CACHE_TIMER);
   CURRENT_FOLDER = '';
   setActiveNav('home');
   app.innerHTML = '<div class="spinner"></div>';
   try {
-    const data = await api('/api/videos');
-    CACHE = data.videos || [];
-    drawGrid(shuffled(CACHE, 20), pageHeadHTML('Home', '20 random videos from your library'));
+    const data = await api('/api/videos?random=1');
+    const videos = data.videos || [];
+    mergeCache(videos);
+    drawGrid(videos, pageHeadHTML('Home', '20 random videos from your library'));
   } catch(e){
     app.innerHTML = errHTML(e);
   }
@@ -556,15 +583,27 @@ async function renderNav(mode){
   VIEW = mode;
   if (!CACHE.length){
     app.innerHTML = '<div class="spinner"></div>';
-    const data = await api('/api/videos');
-    CACHE = data.videos || [];
+    const data = await api('/api/videos?random=1');
+    mergeCache(data.videos || []);
   }
   if (mode === 'recent'){
-    drawGrid(videosByIDs(recentIDs()), pageHeadHTML('Recent', 'The last 20 videos played in this browser'));
+    app.innerHTML = '<div class="spinner"></div>';
+    const videos = await fetchVideosByIDs(recentIDs());
+    drawGrid(videos, pageHeadHTML('Recent', 'The last 20 videos played in this browser'));
     return;
   }
   if (mode === 'liked'){
-    drawGrid(videosByIDs(likedIDs()), pageHeadHTML('Liked videos', 'Videos liked in this browser'));
+    app.innerHTML = '<div class="spinner"></div>';
+    const videos = await fetchVideosByIDs(likedIDs());
+    drawGrid(videos, pageHeadHTML('Liked videos', 'Videos liked in this browser'));
+    return;
+  }
+  if (mode === 'commented'){
+    app.innerHTML = '<div class="spinner"></div>';
+    const data = await api('/api/videos?commented=1');
+    const videos = data.videos || [];
+    mergeCache(videos);
+    drawGrid(videos, pageHeadHTML('Commented Videos', videos.length + ' videos with comments'));
     return;
   }
   drawGrid(CACHE, pageHeadHTML('All videos', CACHE.length + ' videos in your library'));
@@ -674,7 +713,7 @@ function cardEl(v){
         '<div class="sub">'+sub+esc(v.name)+'<span>'+fmtViews(v.views)+' · '+esc(v.uploaded||'')+(v.size?' · '+fmtBytes(v.size):'')+'</span></div>' +
       '</div>' +
     '</div>';
-  el.addEventListener('click', () => location.hash = '#/watch?id='+encodeURIComponent(v.id));
+  el.addEventListener('click', () => openWatch(v.id));
   return el;
 }
 
@@ -682,23 +721,34 @@ function cardEl(v){
 async function renderWatch(id){
   window.scrollTo(0,0);
   app.innerHTML = '<div class="spinner"></div>';
-  // make sure we have the full list for "up next"
-  if (!CACHE.length){
-    try { const d = await api('/api/videos'); CACHE = d.videos||[]; } catch(e){}
+  let v = CACHE.find(x => x.id === id);
+  if (!v) {
+    try {
+      const d = await api('/api/videos?id=' + encodeURIComponent(id));
+      mergeCache(d.videos || []);
+      v = CACHE.find(x => x.id === id);
+    } catch(e) {}
   }
-  const v = CACHE.find(x => x.id === id) || {id, name: id, title: id, path: ''};
+  v = v || {id, name: id, title: id, path: ''};
+  let up = [];
+  try {
+    const d = await api('/api/videos?direct=1&folder=' + encodeURIComponent(v.path || ''));
+    up = (d.videos || []).filter(x => x.id !== id).slice(0,10);
+    mergeCache(up);
+  } catch(e) {}
   rememberRecent(v.id);
   const src = '/stream/'+mediaPath(v.id);
   const initial = esc((v.title||'?').trim().charAt(0).toUpperCase() || '?');
   const subTrack = v.hasSubs ? '<track kind="subtitles" src="/subtitle/'+mediaPath(v.id)+'" srclang="en" label="Subtitles" default>' : '';
-  const up = CACHE.filter(x => x.id !== id).slice(0,10);
   const backFolder = CURRENT_FOLDER || v.path || '';
   const backHref = backFolder ? '#/folder?path=' + encodeURIComponent(backFolder) : '#/';
+  const watchCrumbs = breadcrumbsHTML(v.path || '');
 
   app.innerHTML =
     '<div class="watch">' +
       '<div class="player-wrap">' +
         '<a class="back" href="'+backHref+'"><svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></svg> Back</a>' +
+        watchCrumbs +
         '<div class="player"><video controls autoplay playsinline src="'+src+'">'+subTrack+'</video></div>' +
         '<div class="watch-title">'+esc(v.title)+'</div>' +
         '<div class="watch-meta">' +
@@ -751,7 +801,7 @@ async function renderWatch(id){
     d.innerHTML =
       '<div class="up-thumb"><img loading="lazy" src="/thumb/'+mediaPath(u.id)+'" alt="" onerror="this.style.opacity=.2">'+(u.duration?'<span class="dur">'+esc(u.duration)+'</span>':'')+'</div>' +
       '<div class="up-body"><div class="t">'+esc(u.title)+'</div><div class="s">'+esc(u.path ? u.path+' · ' : '')+fmtViews(u.views)+' · '+esc(u.uploaded||'')+'</div></div>';
-    d.addEventListener('click', () => location.hash = '#/watch?id='+encodeURIComponent(u.id));
+    d.addEventListener('click', () => openWatch(u.id));
     upList.appendChild(d);
   });
 
@@ -762,6 +812,7 @@ async function renderWatch(id){
 
   wireRating(v);
   wireComments(v);
+  wireBreadcrumbs();
 }
 
 // ---- like / dislike --------------------------------------------------------
@@ -928,7 +979,11 @@ function setActiveNav(which){
 document.querySelectorAll('.nav-item').forEach(n => {
   n.addEventListener('click', () => {
     const v = n.dataset.nav;
-    if (v === 'home'){ location.hash = ''; }
+    if (v === 'home'){
+      CACHE_PROMPTED = true;
+      if (location.hash === '') renderHome();
+      else location.hash = '';
+    }
     else if (v === 'cache'){ location.hash = '#/cache'; }
     else { renderNav(v); }
   });

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math/rand"
 	"mime"
 	"net/http"
 	"net/url"
@@ -115,6 +116,99 @@ func (s *Server) scanVideos(folder string) ([]VideoInfo, error) {
 	return out, err
 }
 
+func (s *Server) scanDirectVideos(folder string) ([]VideoInfo, error) {
+	s.mu.Lock()
+	s.lastScan = time.Now()
+	s.mu.Unlock()
+
+	var out []VideoInfo
+	dir, _, err := s.resolveFolder(folder)
+	if err != nil {
+		return nil, err
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !videoExt[strings.ToLower(filepath.Ext(entry.Name()))] {
+			continue
+		}
+		path := filepath.Join(dir, entry.Name())
+		rel, err := filepath.Rel(s.root, path)
+		if err != nil {
+			continue
+		}
+		info, _ := entry.Info()
+		out = append(out, s.infoFor(filepath.ToSlash(rel), info))
+	}
+	return out, nil
+}
+
+func (s *Server) randomVideos(limit int) ([]VideoInfo, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	s.mu.Lock()
+	s.lastScan = time.Now()
+	s.mu.Unlock()
+
+	var sample []string
+	seen := 0
+	err := filepath.WalkDir(s.root, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() {
+			if strings.HasPrefix(d.Name(), ".") {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !videoExt[strings.ToLower(filepath.Ext(d.Name()))] {
+			return nil
+		}
+		rel, err := filepath.Rel(s.root, path)
+		if err != nil {
+			return nil
+		}
+		rel = filepath.ToSlash(rel)
+		seen++
+		if len(sample) < limit {
+			sample = append(sample, rel)
+			return nil
+		}
+		if j := rand.Intn(seen); j < limit {
+			sample[j] = rel
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]VideoInfo, 0, len(sample))
+	for _, name := range sample {
+		info, _ := os.Stat(filepath.Join(s.root, filepath.FromSlash(name)))
+		out = append(out, s.infoFor(name, info))
+	}
+	return out, nil
+}
+
+func (s *Server) videosByName(names []string) []VideoInfo {
+	out := make([]VideoInfo, 0, len(names))
+	seen := map[string]bool{}
+	for _, name := range names {
+		name = filepath.ToSlash(strings.TrimSpace(name))
+		if name == "" || seen[name] || !s.isVideo(name) {
+			continue
+		}
+		seen[name] = true
+		info, _ := os.Stat(filepath.Join(s.root, filepath.FromSlash(name)))
+		out = append(out, s.infoFor(name, info))
+	}
+	return out
+}
+
 // VideoInfo is the JSON shape sent to the client.
 type VideoInfo struct {
 	ID          string `json:"id"`
@@ -181,6 +275,32 @@ func nameFromID(id string) string {
 
 func (s *Server) handleVideos(w http.ResponseWriter, r *http.Request) {
 	folder := r.URL.Query().Get("folder")
+	if ids := r.URL.Query()["id"]; len(ids) > 0 {
+		writeJSON(w, http.StatusOK, map[string]any{"videos": s.videosByName(ids)})
+		return
+	}
+	if folder == "" && r.URL.Query().Get("commented") == "1" {
+		writeJSON(w, http.StatusOK, map[string]any{"videos": s.videosByName(s.social.commentedVideos())})
+		return
+	}
+	if folder == "" && r.URL.Query().Get("random") == "1" {
+		videos, err := s.randomVideos(20)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, errMap(err))
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"videos": videos})
+		return
+	}
+	if r.URL.Query().Get("direct") == "1" {
+		videos, err := s.scanDirectVideos(folder)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, errMap(err))
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"videos": videos})
+		return
+	}
 	videos, err := s.scanVideos(folder)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, errMap(err))
